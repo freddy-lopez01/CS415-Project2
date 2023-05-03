@@ -1,0 +1,8 @@
+CIS 415 Project 2 Report:
+Name: Freddy Lopez
+DuckID: flopez2
+UO: 951833937
+
+Report:
+
+In this project, I can proudly say that it works as it was intended to. I thourougly enjoyed this project as It solidified my understanding of how threads work and how the thread functions do work. It also was challenging but eye opening to write code to be used by other code that I could not see. However, I will say that it took me a solid 2 days of just reading the code and drawing out multiple rough sketches of how the code should work. It also Was nice to get practice at reading .h files efficiently. I did discuss and debated how this project worked with Mason, Carter, and Ash. My 2d buffer was not working properly until Ash hinted that I create it in a way that WASNT like the way we create a 2d array when mallocing. I also helped Sydney understand the reason behind using a 2d buffer for the recieving buffer and how that allows us to store the packet descriptors according to their PID which makes the two get functions called by the apps become super simple. 

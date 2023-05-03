@@ -31,91 +31,87 @@
 #define UNUSED __attribute__((unused))
 typedef struct network_device NetworkDevice;
 unsigned long myfpds_size; 
-int count = 0; 
-int in = 0; 
-int out = 0; 
 
 pthread_t consumer_thread;
 pthread_t producer_thread;
+//pthread_mutex_t myMutex = PTHREAD_MUTEX_INITIALIZER; 
+//pthread_cond_t mycond = PTHREAD_COND_INITIALIZER; 
 NetworkDevice *myNetworkDevice; 
 //bounded buffer implimentation
-BoundedBuffer *bbin = NULL; // Bounded buffer for producers packages 
-BoundedBuffer *bbout = NULL; // Bounded buffer for consumer packages 
+BoundedBuffer *bbrecieving[MAX_PID+1]; // 2D Bounded buffer for producers packages 
+BoundedBuffer *bbsend; // Bounded buffer for consumer packages 
 FreePacketDescriptorStore *myfpds; 
-PID *arr_pid[MAX_PID+1];
 
 
+ 
 
-static int SandSbuffer(PacketDescriptor **packetFound, PID pid){
-
-	for(int i = 0; i < (MAX_PID+1); i++){
-		PacketDescriptor *checkpd; 
-		bbout->blockingRead(bbout, (void**)&checkpd);
-		PID checkPID = getPID(checkpd);
-		if(checkPID == pid){
-			printf("Packet found for Application %d\n", pid);
-			*packetFound = checkpd;
-			return 1; 
-		}
-		bbout->blockingWrite(bbout, checkpd);
-	}
-	return 0;
-}
-
-
-PacketDescriptor *currentPD; 
-
-void *getWork(UNUSED void *arg){
-	//PacketDescriptor *currentPD; 
+void *receivingThread(UNUSED void *arg){
+	PacketDescriptor *currentPD;
 	printf("Thread created successfully\n");
 	
 	// remove packet from fpds
 	//clear pd
-	while(1){
-		myfpds->blockingGet(myfpds, (void*)&currentPD);
+	while(1){ 
+		// 0  1  2  3  4  5 
+		// pd pd pd pd pd pd
+
+		myfpds->blockingGet(myfpds, &currentPD);
 		initPD(currentPD);
 		// register packet descriptor to the Network Device 
 		myNetworkDevice->registerPD(myNetworkDevice, currentPD); // what "pd" should this point to 
 		// wait for the packet descriptor to be populated 
-		myNetworkDevice->sendPacket(myNetworkDevice, currentPD);
+		//myNetworkDevice->sendPacket(myNetworkDevice, currentPD);
 
-		
+		//printf("AwaitngIncomingPacket....\n");
 
-		printf("AwaitngIncomingPacket....\n");
+		/*
 		myfpds_size = myfpds->size(myfpds);
 		printf("Updated size: %lu\n", myfpds_size);
+		*/
 
-
-		myNetworkDevice->awaitIncomingPacket(myNetworkDevice); // thread blocked until populated 
-		// add pd to the bounded buffer and to the array of pd's according to their PID's
-		/*PID pd_pid = getPID(currentPD);
-		arr_pid[num_prog] = pd_pid; 
-		arr_pid[num_prog][0] = currentPD; */
-
+		myNetworkDevice->awaitIncomingPacket(myNetworkDevice); 
 		//write packet Descriptor to the bbout buffer once filled by the Network device 
-
-		bbout->blockingWrite(bbout, currentPD);
-
+		// write the pd in the bbrecieving buffer according to its PID
+		PID appPID = getPID(currentPD);
+		(bbrecieving[appPID])->blockingWrite(bbrecieving[appPID], (void*)currentPD);
 	}
-	return NULL; 
 }
 
 
 
-PacketDescriptor *currentPDtoSend; 
-void *sendingToAPP(UNUSED void *arg){
 
-	// from here, we need to take the pd in bbout OUT and send it to the corresponding app via PID identifer
+void *sendingThread(UNUSED void *arg){
+	PacketDescriptor *pdToReturn; 
+	//unsigned long current_fpdsSize; 
+
+	// from here, we need to take the pd in bbsend and send it to the Network Device. Use the send packets and if 
+	// the poac
 	printf("Thread created successfully\n");
 	while(1){
 
+		bbsend->blockingRead(bbsend, (void**)&pdToReturn);
+
+
+		int attempts = 0; 
+		// attemp to send the packet
+		while(attempts < 10){
+			myNetworkDevice->sendPacket(myNetworkDevice, pdToReturn);
+			attempts++;
+		}
+
+		//once done with the 
+		myfpds->blockingPut(myfpds, pdToReturn);
+
+		//current_fpdsSize = myfpds->size(myfpds);
+		//printf("Current Size of myfds: %lu\n", current_fpdsSize);
 
 
 		// once packet is sent and finished being used by the app, we then need to put the pd into the bbin??
 		// and THEN pull it out and place into the fpds again???
 	}
-	return NULL; 
 }
+
+
 
 void init_packet_driver(NetworkDevice *nd, void *mem_start, 
 	unsigned long mem_length, FreePacketDescriptorStore **fpds){
@@ -130,27 +126,27 @@ void init_packet_driver(NetworkDevice *nd, void *mem_start,
 	myNetworkDevice = nd; 
 	myfpds = FreePacketDescriptorStore_create(mem_start, mem_length); // call the create function for the file descriptor
 	myfpds_size = myfpds->size(myfpds);
-	printf("Size of myfds: %lu\n", myfpds_size);
 
-	bbin = BoundedBuffer_create(1024);
-	bbout = BoundedBuffer_create(1024);
+	//printf("Size of myfds: %lu\n", myfpds_size);
 
-	if((bbin || bbout) == NULL){
-		fprintf(stderr, "Thread creation failed\n");
 
-	*fpds = myfpds;
+	//bbrecieving = BoundedBuffer_create(MAX_PID+1);
+	for(int i = 0; i < MAX_PID+1; i++){
+		// we dont want to have a buffer to large or to small to where we run out of packets 
+		bbrecieving[i] = BoundedBuffer_create((int)myfpds_size/(MAX_PID+1));
 	}
 
-	pthread_create(&producer_thread, NULL, sendingToAPP, NULL);
-	pthread_create(&consumer_thread, NULL, getWork, NULL);
-	pthread_join(producer_thread, NULL);
-	pthread_join(consumer_thread, NULL); 
+	bbsend = BoundedBuffer_create(MAX_PID+1);
+
+	*fpds = myfpds;
+	// create both threads 
+
+	pthread_create(&producer_thread, NULL, &sendingThread, NULL);
+	pthread_create(&consumer_thread, NULL, &receivingThread, NULL);
+	//pthread_join(producer_thread, NULL);
+	//pthread_join(consumer_thread, NULL); 
+	//apparenlty we dont need to join, whoops
 }
-
-
-
-
-
 
 
 /*these two functions hand in a Packet Descriptor for dispatching. Neither call should 
@@ -169,7 +165,9 @@ void blocking_send_packet(PacketDescriptor *pd){
 	*/
 
 	printf("blocking_send_packet funciton\n");
-	bbin->blockingWrite(bbin, pd);
+	bbsend->blockingWrite(bbsend, (void*)pd);
+
+	//sendbuffer
 }
 
 
@@ -190,8 +188,7 @@ int nonblocking_send_packet(PacketDescriptor *pd){
 
 	int success; 
 
-	success = bbin->nonblockingWrite(bbin, pd);
-	currentPD = pd; 
+	success = bbsend->nonblockingWrite(bbsend, (void*)pd);
 	if(success){
 		return 1; 
 	}
@@ -216,13 +213,13 @@ void blocking_get_packet(PacketDescriptor **pd, PID pid){
 	**Wait until there is a packet for 'pid'
 	**return packet descriptor to the calling application
 	*/
-
 	//function that checks if the pid is here
+	//printf("blocking_get_packet() is getting called\n");
+	//SandSbuffer((void*)&pd, pid);
 
-
-	printf("blocking_get_packet() is getting called\n");
-	SandSbuffer((void*)&pd, pid);
+	//getbuffer
 	//return NULL;
+	bbrecieving[pid]->blockingRead(bbrecieving[pid], (void**)pd);
 
 }
 
@@ -238,9 +235,17 @@ int nonblocking_get_packet(PacketDescriptor **pd, PID pid){
 	 	otherwise, return 0 for the value of the function
 	 */
 
-	printf("nonblocking_get_packet() is getting called\n");
-	if((SandSbuffer((void*)&pd, pid)) == 1){
-		return 1; 
+
+	//printf("nonblocking_get_packet() is getting called\n");
+	//if((SandSbuffer((void*)&pd, pid)) == 1){
+	//	return 1; 
+	//}
+	//return 0; 
+
+	int res = bbrecieving[pid]->nonblockingRead(bbrecieving[pid], (void**)pd);
+	if(res ==1){
+		return 1;
 	}
 	return 0; 
+
 }
